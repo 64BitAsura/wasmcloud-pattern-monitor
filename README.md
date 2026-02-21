@@ -1,4 +1,4 @@
-# wasmCloud Pattern Monitor
+# wasmCloud Pattern Encoder
 
 A wasmCloud component that ingests JSON message streams from a NATS messaging
 provider, encodes each message's fields as
