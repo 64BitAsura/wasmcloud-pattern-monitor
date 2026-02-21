@@ -129,8 +129,17 @@ if ! command -v redis-cli &>/dev/null && ! command -v redis-server &>/dev/null; 
     exit 1
 fi
 
+# nats CLI is used to publish test messages (wash pub was removed in wash v0.40+)
+if ! command -v nats &>/dev/null; then
+    error "nats CLI not found. Install from https://github.com/nats-io/natscli/releases"
+    error "  curl -sSL https://github.com/nats-io/natscli/releases/download/v0.1.6/nats-0.1.6-linux-amd64.zip -o /tmp/nats.zip"
+    error "  unzip /tmp/nats.zip -d /tmp/nats-dl && sudo cp /tmp/nats-dl/nats-0.1.6-linux-amd64/nats /usr/local/bin/nats"
+    exit 1
+fi
+
 info "wash: $(wash --version 2>&1 | head -1)"
 info "redis-cli: $(redis-cli --version 2>/dev/null || echo 'not found')"
+info "nats: $(nats --version 2>/dev/null)"
 
 # ── 2. Redis lifecycle ─────────────────────────────────────────────────────────
 section "2 · Redis"
@@ -229,7 +238,8 @@ section "6 · Test Message"
 
 info "Publishing JSON payload to subject '${TEST_SUBJECT}'..."
 info "  Payload: ${TEST_PAYLOAD}"
-wash pub "$TEST_SUBJECT" "$TEST_PAYLOAD"
+# nats pub connects to the embedded NATS server that wash up started on 127.0.0.1:4222
+nats pub --server "nats://127.0.0.1:4222" "$TEST_SUBJECT" "$TEST_PAYLOAD"
 
 info "Waiting ${PROCESS_WAIT}s for component to process the message..."
 sleep "$PROCESS_WAIT"

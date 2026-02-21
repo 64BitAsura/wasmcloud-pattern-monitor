@@ -5,7 +5,7 @@ world pattern-monitor {
     import wasi:logging/logging@0.1.0-draft;
 
     /// Redis-backed key-value store for persisting vectors
-    import wasi:keyvalue/store@0.2.0-draft2;
+    import wasi:keyvalue/store@0.2.0-draft;
 
     /// Receive JSON message streams from the messaging provider
     export wasmcloud:messaging/handler@0.2.0;

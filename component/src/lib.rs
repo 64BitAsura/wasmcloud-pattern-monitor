@@ -12,8 +12,8 @@ use std::collections::HashMap;
 
 /// Holds VSA-encoded fields produced from a single JSON message.
 pub(crate) struct EncodedFields {
-    pub id_to_vec: HashMap<u64, SparseVec>,
-    pub id_to_field: HashMap<u64, String>,
+    pub id_to_vec: HashMap<usize, SparseVec>,
+    pub id_to_field: HashMap<usize, String>,
     pub index: TernaryInvertedIndex,
 }
 
@@ -29,18 +29,17 @@ pub(crate) fn encode_json_fields(body: &[u8]) -> Result<EncodedFields, String> {
 
     // ReversibleVSAConfig::default() is fully deterministic (no random state).
     let config = ReversibleVSAConfig::default();
-    let mut id_to_vec: HashMap<u64, SparseVec> = HashMap::new();
-    let mut id_to_field: HashMap<u64, String> = HashMap::new();
+    let mut id_to_vec: HashMap<usize, SparseVec> = HashMap::new();
+    let mut id_to_field: HashMap<usize, String> = HashMap::new();
     let mut index = TernaryInvertedIndex::new();
 
     for (idx, (key, value)) in obj.iter().enumerate() {
         let key_vec = SparseVec::encode_data(key.as_bytes(), &config, None);
         let val_vec = SparseVec::encode_data(value.to_string().as_bytes(), &config, None);
         let bound = key_vec.bind(&val_vec);
-        let id = idx as u64;
-        index.add(idx, &bound); // TernaryInvertedIndex::add takes usize
-        id_to_field.insert(id, key.clone());
-        id_to_vec.insert(id, bound);
+        index.add(idx, &bound);
+        id_to_field.insert(idx, key.clone());
+        id_to_vec.insert(idx, bound);
     }
 
     index.finalize();
@@ -53,7 +52,7 @@ pub(crate) fn encode_json_fields(body: &[u8]) -> Result<EncodedFields, String> {
 
 /// Bundle all per-field hypervectors into a single master bundle vector via
 /// VSA superposition. Returns `None` if `id_to_vec` is empty.
-pub(crate) fn build_master_bundle(id_to_vec: &HashMap<u64, SparseVec>) -> Option<SparseVec> {
+pub(crate) fn build_master_bundle(id_to_vec: &HashMap<usize, SparseVec>) -> Option<SparseVec> {
     let mut iter = id_to_vec.values();
     iter.next()
         .map(|first| iter.fold(first.clone(), |acc, v| acc.bundle(v)))
@@ -253,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_build_master_bundle_empty_map() {
-        let empty: HashMap<u64, SparseVec> = HashMap::new();
+        let empty: HashMap<usize, SparseVec> = HashMap::new();
         let bundle = build_master_bundle(&empty);
         assert!(bundle.is_none(), "empty map should yield no bundle");
     }

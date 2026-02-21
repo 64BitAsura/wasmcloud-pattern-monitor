@@ -24,7 +24,8 @@ NATS message  →  component (VSA encode)  →  Redis keys verified
 
 | Tool | Purpose | Install |
 |------|---------|---------|
-| `wash` | wasmCloud CLI — start host, deploy app, publish messages | `curl -s "https://packagecloud.io/install/repositories/wasmcloud/core/script.deb.sh" \| sudo bash && sudo apt-get install -y wash` |
+| `wash` | wasmCloud CLI — start host, deploy app | `curl -s "https://packagecloud.io/install/repositories/wasmcloud/core/script.deb.sh" \| sudo bash && sudo apt-get install -y wash` |
+| `nats` | Publish test messages to NATS (`wash pub` was removed in wash v0.40+) | `curl -sSL https://github.com/nats-io/natscli/releases/download/v0.1.6/nats-0.1.6-linux-amd64.zip -o /tmp/nats.zip && unzip -q /tmp/nats.zip -d /tmp/nats-dl && sudo cp /tmp/nats-dl/nats-0.1.6-linux-amd64/nats /usr/local/bin/nats` |
 | `redis-server` | Redis server (auto-started if not already running) | `sudo apt-get install -y redis-server` |
 | `redis-cli` | Key verification | included in `redis-tools` / `redis-server` packages |
 

@@ -21,20 +21,7 @@ spec:
           properties:
             instances: 1
 
-        # Link to NATS messaging provider (inbound message stream)
-        - type: link
-          properties:
-            target:
-              name: nats-messaging
-              config:
-                - name: messaging-config
-                  properties:
-                    subscriptions: "pattern.monitor.>"
-            namespace: wasmcloud
-            package: messaging
-            interfaces: [handler]
-
-        # Link to Redis key-value provider (vector storage)
+        # Link to Redis key-value provider (component→provider, component imports store)
         - type: link
           properties:
             target:
@@ -53,6 +40,21 @@ spec:
       properties:
         image: ghcr.io/wasmcloud/messaging-nats:0.23.1
         id: nats-messaging
+      traits:
+        # Link from the NATS provider (source/caller) to the component (target/handler).
+        # Subscriptions are configured on the source (the provider that delivers messages).
+        - type: link
+          properties:
+            target:
+              name: pattern-monitor
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [handler]
+            source:
+              config:
+                - name: messaging-config
+                  properties:
+                    subscriptions: "pattern.monitor.>"
 
     # ── Redis key-value capability provider ─────────────────────────────────
     - name: redis-keyvalue
