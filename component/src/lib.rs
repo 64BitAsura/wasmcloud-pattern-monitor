@@ -1,54 +1,100 @@
+// ── WIT bindings (excluded from test builds to allow native compilation) ──────
+#[cfg(not(test))]
 wit_bindgen::generate!({ generate_all });
 
-use crate::exports::wasmcloud::messaging::handler::{Guest, BrokerMessage};
-use crate::wasi::keyvalue::store;
-use crate::wasi::logging::logging::{log, Level};
-
-use embeddenator_vsa::{ReversibleVSAConfig, SparseVec};
 use embeddenator_io::to_bincode;
-use embeddenator_retrieval::{
-    TernaryInvertedIndex,
-    search::{two_stage_search, SearchConfig},
-};
-
+use embeddenator_retrieval::TernaryInvertedIndex;
+use embeddenator_vsa::{ReversibleVSAConfig, SparseVec};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// Name of the wasi:keyvalue bucket used by this component.
-const BUCKET_ID: &str = "pattern-monitor-vectors";
+// ─── Pure encoding logic (testable on native target) ─────────────────────────
 
-/// Key-space prefixes used when persisting hypervectors.
+/// Holds VSA-encoded fields produced from a single JSON message.
+pub(crate) struct EncodedFields {
+    pub id_to_vec: HashMap<u64, SparseVec>,
+    pub id_to_field: HashMap<u64, String>,
+    pub index: TernaryInvertedIndex,
+}
+
+/// Parse a JSON object and encode each key/value field as a bound VSA
+/// hypervector. Returns `Err` if the payload is not a valid JSON object.
+pub(crate) fn encode_json_fields(body: &[u8]) -> Result<EncodedFields, String> {
+    let json: Value =
+        serde_json::from_slice(body).map_err(|e| format!("JSON parse error: {e}"))?;
+
+    let obj = json
+        .as_object()
+        .ok_or_else(|| "message body is not a JSON object".to_string())?;
+
+    // ReversibleVSAConfig::default() is fully deterministic (no random state).
+    let config = ReversibleVSAConfig::default();
+    let mut id_to_vec: HashMap<u64, SparseVec> = HashMap::new();
+    let mut id_to_field: HashMap<u64, String> = HashMap::new();
+    let mut index = TernaryInvertedIndex::new();
+
+    for (idx, (key, value)) in obj.iter().enumerate() {
+        let key_vec = SparseVec::encode_data(key.as_bytes(), &config, None);
+        let val_vec = SparseVec::encode_data(value.to_string().as_bytes(), &config, None);
+        let bound = key_vec.bind(&val_vec);
+        let id = idx as u64;
+        index.add(idx, &bound); // TernaryInvertedIndex::add takes usize
+        id_to_field.insert(id, key.clone());
+        id_to_vec.insert(id, bound);
+    }
+
+    index.finalize();
+    Ok(EncodedFields {
+        id_to_vec,
+        id_to_field,
+        index,
+    })
+}
+
+/// Bundle all per-field hypervectors into a single master bundle vector via
+/// VSA superposition. Returns `None` if `id_to_vec` is empty.
+pub(crate) fn build_master_bundle(id_to_vec: &HashMap<u64, SparseVec>) -> Option<SparseVec> {
+    let mut iter = id_to_vec.values();
+    iter.next()
+        .map(|first| iter.fold(first.clone(), |acc, v| acc.bundle(v)))
+}
+
+/// Serialise a `SparseVec` to bincode bytes.
+pub(crate) fn serialise_vector(vec: &SparseVec) -> Result<Vec<u8>, String> {
+    to_bincode(vec).map_err(|e| format!("bincode encode error: {e}"))
+}
+
+// ─── wasmCloud component implementation (excluded from test builds) ───────────
+
+#[cfg(not(test))]
+const BUCKET_ID: &str = "pattern-monitor-vectors";
+#[cfg(not(test))]
 const PREFIX_SEMANTIC: &str = "semantic:v1";
+#[cfg(not(test))]
 const PREFIX_BUNDLE: &str = "bundle:v1";
 
-// ─── Helper: convert a wasi:keyvalue store::Error to a String ────────────────
-
-fn kv_err(e: store::Error) -> String {
+#[cfg(not(test))]
+fn kv_err(e: crate::wasi::keyvalue::store::Error) -> String {
+    use crate::wasi::keyvalue::store::Error;
     match e {
-        store::Error::NoSuchStore => "keyvalue error: no such store".to_string(),
-        store::Error::AccessDenied => "keyvalue error: access denied".to_string(),
-        store::Error::Other(msg) => format!("keyvalue error: {msg}"),
+        Error::NoSuchStore => "keyvalue error: no such store".to_string(),
+        Error::AccessDenied => "keyvalue error: access denied".to_string(),
+        Error::Other(msg) => format!("keyvalue error: {msg}"),
     }
 }
 
-// ─── Component struct ────────────────────────────────────────────────────────
-
+#[cfg(not(test))]
 struct PatternMonitor;
 
-// ─── Messaging handler implementation ────────────────────────────────────────
+#[cfg(not(test))]
+impl crate::exports::wasmcloud::messaging::handler::Guest for PatternMonitor {
+    fn handle_message(
+        msg: crate::exports::wasmcloud::messaging::handler::BrokerMessage,
+    ) -> Result<(), String> {
+        use crate::wasi::keyvalue::store;
+        use crate::wasi::logging::logging::{log, Level};
+        use embeddenator_retrieval::search::{two_stage_search, SearchConfig};
 
-impl Guest for PatternMonitor {
-    /// Invoked for every message arriving on a subscribed NATS subject.
-    ///
-    /// Workflow
-    /// 1. Parse the body as a JSON object.
-    /// 2. For every key/value pair encode both key and value bytes into a
-    ///    `SparseVec` (VSA hypervector), then *bind* them together.
-    /// 3. Persist each bound semantic vector into Redis (wasi:keyvalue) under
-    ///    the key `semantic:v1:{field_name}`.
-    /// 4. *Bundle* (superpose) all per-field vectors into a master vector and
-    ///    persist it under `bundle:v1:{subject}`.
-    fn handle_message(msg: BrokerMessage) -> Result<(), String> {
         let subject = msg.subject.clone();
 
         log(
@@ -61,68 +107,37 @@ impl Guest for PatternMonitor {
             ),
         );
 
-        // ── 1. Parse JSON ────────────────────────────────────────────────────
-        let json: Value = serde_json::from_slice(&msg.body)
-            .map_err(|e| format!("JSON parse error: {e}"))?;
-
-        let obj = match json.as_object() {
-            Some(o) => o,
-            None => {
+        // ── 1. Encode fields ──────────────────────────────────────────────────
+        let encoded = match encode_json_fields(&msg.body) {
+            Ok(e) if e.id_to_vec.is_empty() => {
+                log(Level::Warn, "pattern-monitor", "empty JSON object; skipping");
+                return Ok(());
+            }
+            Ok(e) => e,
+            Err(err) => {
                 log(
                     Level::Warn,
                     "pattern-monitor",
-                    "message body is not a JSON object; skipping",
+                    &format!("skipping message: {err}"),
                 );
                 return Ok(());
             }
         };
 
-        if obj.is_empty() {
-            log(
-                Level::Warn,
-                "pattern-monitor",
-                "empty JSON object; skipping",
-            );
-            return Ok(());
-        }
+        let EncodedFields {
+            id_to_vec,
+            id_to_field,
+            index,
+        } = encoded;
 
-        // ── 2. Encode fields and build local retrieval index ─────────────────
-        let config = ReversibleVSAConfig::default();
-
-        // id_to_vec: id -> SparseVec  (needed for two_stage_search)
-        // id_to_field: id -> field name (for logging)
-        let mut id_to_vec: HashMap<u64, SparseVec> = HashMap::new();
-        let mut id_to_field: HashMap<u64, String> = HashMap::new();
-        let mut index = TernaryInvertedIndex::new();
-
-        for (idx, (key, value)) in obj.iter().enumerate() {
-            let key_bytes = key.as_bytes();
-            let val_str = value.to_string();
-            let val_bytes = val_str.as_bytes();
-
-            // Encode key and value independently, then bind the pair together
-            let key_vec = SparseVec::encode_data(key_bytes, &config, None);
-            let val_vec = SparseVec::encode_data(val_bytes, &config, None);
-            let bound = key_vec.bind(&val_vec);
-
-            let id = idx as u64;
-            index.add(id, &bound);
-            id_to_field.insert(id, key.clone());
-            id_to_vec.insert(id, bound);
-        }
-
-        index.finalize();
-
-        // ── 3. Persist semantic vectors to Redis ─────────────────────────────
+        // ── 2. Persist semantic vectors ───────────────────────────────────────
         let bucket = store::open(BUCKET_ID).map_err(kv_err)?;
 
         for (id, vec) in &id_to_vec {
             let field_name = id_to_field.get(id).map(String::as_str).unwrap_or("unknown");
-            let bytes: Vec<u8> = to_bincode(vec)
-                .map_err(|e| format!("bincode encode error for field '{field_name}': {e}"))?;
+            let bytes = serialise_vector(vec)?;
             let kv_key = format!("{PREFIX_SEMANTIC}:{field_name}");
             bucket.set(&kv_key, &bytes).map_err(kv_err)?;
-
             log(
                 Level::Debug,
                 "pattern-monitor",
@@ -134,16 +149,11 @@ impl Guest for PatternMonitor {
             );
         }
 
-        // ── 4. Build and persist master bundle ───────────────────────────────
-        let mut values_iter = id_to_vec.values();
-        if let Some(first) = values_iter.next() {
-            let master = values_iter.fold(first.clone(), |acc, v| acc.bundle(v));
-
-            let bundle_bytes: Vec<u8> = to_bincode(&master)
-                .map_err(|e| format!("bincode encode error for bundle: {e}"))?;
+        // ── 3. Build and persist master bundle ────────────────────────────────
+        if let Some(master) = build_master_bundle(&id_to_vec) {
+            let bundle_bytes = serialise_vector(&master)?;
             let bundle_key = format!("{PREFIX_BUNDLE}:{subject}");
             bucket.set(&bundle_key, &bundle_bytes).map_err(kv_err)?;
-
             log(
                 Level::Info,
                 "pattern-monitor",
@@ -156,7 +166,7 @@ impl Guest for PatternMonitor {
             );
         }
 
-        // ── 5. Demonstrate retrieval: query the first field against the index ──
+        // ── 4. Demonstrate retrieval ──────────────────────────────────────────
         if id_to_vec.len() > 1 {
             if let Some(query_vec) = id_to_vec.get(&0) {
                 let query_field = id_to_field
@@ -164,9 +174,7 @@ impl Guest for PatternMonitor {
                     .map(String::as_str)
                     .unwrap_or("field_0");
                 let search_cfg = SearchConfig::default();
-                let results =
-                    two_stage_search(query_vec, &index, &id_to_vec, &search_cfg, 5);
-
+                let results = two_stage_search(query_vec, &index, &id_to_vec, &search_cfg, 5);
                 log(
                     Level::Debug,
                     "pattern-monitor",
@@ -183,4 +191,98 @@ impl Guest for PatternMonitor {
     }
 }
 
+#[cfg(not(test))]
 export!(PatternMonitor);
+
+// ─── Unit tests ───────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use embeddenator_io::from_bincode;
+
+    #[test]
+    fn test_encode_fields_parses_json_object() {
+        let body = br#"{"event":"quake","magnitude":"6.2"}"#;
+        let result = encode_json_fields(body);
+        assert!(result.is_ok(), "expected Ok, got: {:?}", result.err());
+        let encoded = result.unwrap();
+        assert_eq!(encoded.id_to_vec.len(), 2, "expected 2 field vectors");
+        assert_eq!(encoded.id_to_field.len(), 2, "expected 2 field names");
+    }
+
+    #[test]
+    fn test_encode_fields_rejects_json_array() {
+        let result = encode_json_fields(b"[1, 2, 3]");
+        assert!(result.is_err());
+        assert!(
+            result.err().unwrap().contains("not a JSON object"),
+            "error should mention 'not a JSON object'"
+        );
+    }
+
+    #[test]
+    fn test_encode_fields_rejects_invalid_json() {
+        let result = encode_json_fields(b"not json");
+        assert!(result.is_err());
+        assert!(
+            result.err().unwrap().contains("JSON parse error"),
+            "error should mention 'JSON parse error'"
+        );
+    }
+
+    #[test]
+    fn test_encode_fields_rejects_json_string() {
+        let result = encode_json_fields(br#""just a string""#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_build_master_bundle_single_field() {
+        let encoded = encode_json_fields(br#"{"only":"field"}"#).unwrap();
+        let bundle = build_master_bundle(&encoded.id_to_vec);
+        assert!(bundle.is_some(), "bundle should exist for a single-field object");
+    }
+
+    #[test]
+    fn test_build_master_bundle_multiple_fields() {
+        let encoded = encode_json_fields(br#"{"a":"1","b":"2","c":"3"}"#).unwrap();
+        let bundle = build_master_bundle(&encoded.id_to_vec);
+        assert!(bundle.is_some(), "bundle should exist for a multi-field object");
+    }
+
+    #[test]
+    fn test_build_master_bundle_empty_map() {
+        let empty: HashMap<u64, SparseVec> = HashMap::new();
+        let bundle = build_master_bundle(&empty);
+        assert!(bundle.is_none(), "empty map should yield no bundle");
+    }
+
+    #[test]
+    fn test_serialise_vector_roundtrip() {
+        let encoded =
+            encode_json_fields(br#"{"sensor":"temperature","value":"42.5"}"#).unwrap();
+        let original = encoded.id_to_vec.values().next().unwrap();
+        let bytes = serialise_vector(original).unwrap();
+        assert!(!bytes.is_empty(), "serialised bytes must not be empty");
+        // Deserialise then re-serialise: bytes must be identical (bincode is deterministic)
+        let restored: SparseVec =
+            from_bincode(&bytes).expect("from_bincode should succeed on a serialised SparseVec");
+        let bytes2 = serialise_vector(&restored).expect("re-serialisation should succeed");
+        assert_eq!(
+            bytes, bytes2,
+            "re-serialising a deserialised SparseVec must produce identical bytes"
+        );
+    }
+
+    #[test]
+    fn test_same_input_produces_same_vector() {
+        // from_data is deterministic: same bytes -> same serialised vector
+        let body = br#"{"key":"value"}"#;
+        let enc1 = encode_json_fields(body).unwrap();
+        let enc2 = encode_json_fields(body).unwrap();
+        let bytes1 = serialise_vector(enc1.id_to_vec.values().next().unwrap()).unwrap();
+        let bytes2 = serialise_vector(enc2.id_to_vec.values().next().unwrap()).unwrap();
+        assert_eq!(bytes1, bytes2, "same JSON input must produce identical vector bytes");
+    }
+}
