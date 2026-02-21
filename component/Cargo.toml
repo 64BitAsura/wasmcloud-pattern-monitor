@@ -1,0 +1,28 @@
+[package]
+name = "pattern-monitor"
+version = "0.1.0"
+edition = "2021"
+description = "wasmCloud component that encodes JSON message streams into VSA hypervectors and stores semantic vectors and master bundles in a Redis-backed wasi:keyvalue store."
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# WIT bindings generator for wasmCloud component model
+wit-bindgen = "0.48"
+
+# JSON parsing for incoming message payloads
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Vector Symbolic Architecture: encode data to hypervectors, bundle, bind, cosine similarity
+# default features include simd; disable cuda
+embeddenator-vsa = { version = "0.23", default-features = false, features = ["simd"] }
+
+# I/O serialisation utilities: to_bincode / from_bincode for persisting SparseVec bytes
+embeddenator-io = { version = "0.21", default-features = false }
+
+# Semantic retrieval: inverted index + two-stage search over stored vectors
+embeddenator-retrieval = { version = "0.22", default-features = false }

@@ -1,0 +1,62 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: pattern-monitor-app
+  annotations:
+    version: v0.1.0
+    description: >
+      wasmCloud pattern-monitor: encodes JSON message streams into VSA
+      hypervectors and persists semantic vectors + master bundles in Redis.
+spec:
+  components:
+    # ── Pattern-monitor component ────────────────────────────────────────────
+    - name: pattern-monitor
+      type: component
+      properties:
+        # file:// URL is intentional for local/CI builds; replace with an OCI
+        # registry reference (e.g. ghcr.io/...) for production deployments.
+        image: file://./component/build/pattern_monitor_s.wasm
+      traits:
+        - type: spreadscaler
+          properties:
+            instances: 1
+
+        # Link to NATS messaging provider (inbound message stream)
+        - type: link
+          properties:
+            target:
+              name: nats-messaging
+              config:
+                - name: messaging-config
+                  properties:
+                    subscriptions: "pattern.monitor.>"
+            namespace: wasmcloud
+            package: messaging
+            interfaces: [handler]
+
+        # Link to Redis key-value provider (vector storage)
+        - type: link
+          properties:
+            target:
+              name: redis-keyvalue
+              config:
+                - name: keyvalue-config
+                  properties:
+                    url: redis://127.0.0.1:6379
+            namespace: wasi
+            package: keyvalue
+            interfaces: [store]
+
+    # ── NATS messaging capability provider ──────────────────────────────────
+    - name: nats-messaging
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/messaging-nats:0.23.1
+        id: nats-messaging
+
+    # ── Redis key-value capability provider ─────────────────────────────────
+    - name: redis-keyvalue
+      type: capability
+      properties:
+        image: ghcr.io/wasmcloud/keyvalue-redis:0.28.2
+        id: redis-keyvalue

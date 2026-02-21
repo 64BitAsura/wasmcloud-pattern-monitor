@@ -1,0 +1,12 @@
+package wasmcloud:pattern-monitor;
+
+world pattern-monitor {
+    /// Structured logging via the host runtime
+    import wasi:logging/logging@0.1.0-draft;
+
+    /// Redis-backed key-value store for persisting vectors
+    import wasi:keyvalue/store@0.2.0-draft2;
+
+    /// Receive JSON message streams from the messaging provider
+    export wasmcloud:messaging/handler@0.2.0;
+}
