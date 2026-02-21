@@ -20,8 +20,7 @@ pub(crate) struct EncodedFields {
 /// Parse a JSON object and encode each key/value field as a bound VSA
 /// hypervector. Returns `Err` if the payload is not a valid JSON object.
 pub(crate) fn encode_json_fields(body: &[u8]) -> Result<EncodedFields, String> {
-    let json: Value =
-        serde_json::from_slice(body).map_err(|e| format!("JSON parse error: {e}"))?;
+    let json: Value = serde_json::from_slice(body).map_err(|e| format!("JSON parse error: {e}"))?;
 
     let obj = json
         .as_object()
@@ -109,7 +108,11 @@ impl crate::exports::wasmcloud::messaging::handler::Guest for PatternMonitor {
         // ── 1. Encode fields ──────────────────────────────────────────────────
         let encoded = match encode_json_fields(&msg.body) {
             Ok(e) if e.id_to_vec.is_empty() => {
-                log(Level::Warn, "pattern-monitor", "empty JSON object; skipping");
+                log(
+                    Level::Warn,
+                    "pattern-monitor",
+                    "empty JSON object; skipping",
+                );
                 return Ok(());
             }
             Ok(e) => e,
@@ -168,10 +171,7 @@ impl crate::exports::wasmcloud::messaging::handler::Guest for PatternMonitor {
         // ── 4. Demonstrate retrieval ──────────────────────────────────────────
         if id_to_vec.len() > 1 {
             if let Some(query_vec) = id_to_vec.get(&0) {
-                let query_field = id_to_field
-                    .get(&0)
-                    .map(String::as_str)
-                    .unwrap_or("field_0");
+                let query_field = id_to_field.get(&0).map(String::as_str).unwrap_or("field_0");
                 let search_cfg = SearchConfig::default();
                 let results = two_stage_search(query_vec, &index, &id_to_vec, &search_cfg, 5);
                 log(
@@ -240,14 +240,20 @@ mod tests {
     fn test_build_master_bundle_single_field() {
         let encoded = encode_json_fields(br#"{"only":"field"}"#).unwrap();
         let bundle = build_master_bundle(&encoded.id_to_vec);
-        assert!(bundle.is_some(), "bundle should exist for a single-field object");
+        assert!(
+            bundle.is_some(),
+            "bundle should exist for a single-field object"
+        );
     }
 
     #[test]
     fn test_build_master_bundle_multiple_fields() {
         let encoded = encode_json_fields(br#"{"a":"1","b":"2","c":"3"}"#).unwrap();
         let bundle = build_master_bundle(&encoded.id_to_vec);
-        assert!(bundle.is_some(), "bundle should exist for a multi-field object");
+        assert!(
+            bundle.is_some(),
+            "bundle should exist for a multi-field object"
+        );
     }
 
     #[test]
@@ -259,8 +265,7 @@ mod tests {
 
     #[test]
     fn test_serialise_vector_roundtrip() {
-        let encoded =
-            encode_json_fields(br#"{"sensor":"temperature","value":"42.5"}"#).unwrap();
+        let encoded = encode_json_fields(br#"{"sensor":"temperature","value":"42.5"}"#).unwrap();
         let original = encoded.id_to_vec.values().next().unwrap();
         let bytes = serialise_vector(original).unwrap();
         assert!(!bytes.is_empty(), "serialised bytes must not be empty");
@@ -282,6 +287,9 @@ mod tests {
         let enc2 = encode_json_fields(body).unwrap();
         let bytes1 = serialise_vector(enc1.id_to_vec.values().next().unwrap()).unwrap();
         let bytes2 = serialise_vector(enc2.id_to_vec.values().next().unwrap()).unwrap();
-        assert_eq!(bytes1, bytes2, "same JSON input must produce identical vector bytes");
+        assert_eq!(
+            bytes1, bytes2,
+            "same JSON input must produce identical vector bytes"
+        );
     }
 }
